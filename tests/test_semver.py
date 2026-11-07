@@ -44,3 +44,26 @@ def test_major_extraction():
 def test_unparsable_raises(bad):
     with pytest.raises(ValueError):
         Version(bad)
+
+
+# --- PEP 440 shapes pip prints -------------------------------------------------
+
+
+def test_pep440_prerelease_ordering():
+    assert Version("2.32.0.dev1") < Version("2.32.0a1") < Version("2.32.0b2")
+    assert Version("2.32.0b2") < Version("2.32.0rc1") < Version("2.32.0")
+    assert Version("1.2.3c1") == Version("1.2.3rc1")  # c is rc shorthand
+    assert Version("2.32.0rc1") < Version("2.32.1.dev3")
+
+
+def test_pep440_post_release_ranks_above_release():
+    assert Version("2.32.0") < Version("2.32.0.post1")
+    assert Version("2.32.0.post1") < Version("2.32.1")
+    assert Version("2.32.0.post1") < Version("2.32.0.post2")
+
+
+def test_pep440_prerelease_below_release_and_npm_style_untouched():
+    assert Version("2.32.0rc1") < Version("2.32.0")
+    assert Version("1.2.3-rc.1") < Version("1.2.3")
+    assert Version("2.0") == Version("2.0.0")  # pip's two-part style still pads
+    assert Version("2.0.7").major == 2

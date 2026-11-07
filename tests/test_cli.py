@@ -196,3 +196,100 @@ def test_main_module_wires_sys_exit():
     main_file = Path(__file__).parent.parent / "src" / "depsweep" / "__main__.py"
     source = main_file.read_text()
     assert "sys.exit(main())" in source
+
+
+# --- filters and concurrency ----------------------------------------------------
+
+
+def make_filter_tree(repo_factory):
+    for name in ("apps/alpha", "apps/beta", "web", "legacy/gamma"):
+        repo_factory(name, package={"name": name}, outdated={})
+    return repo_factory.root
+
+
+def test_include_limits_the_sweep(repo_factory, capsys):
+    tree = make_filter_tree(repo_factory)
+    assert main([str(tree), "--include", "apps/*", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "alpha" in out and "beta" in out
+    assert "web" not in out and "gamma" not in out
+    assert "2 repo(s)" in out
+
+
+def test_exclude_removes_repos_and_wins_over_include(repo_factory, capsys):
+    tree = make_filter_tree(repo_factory)
+    # "*a*" matches alpha, beta and gamma but not web; legacy/* is excluded.
+    code = main([str(tree), "--include", "*a*", "--exclude", "legacy/*", "--dry-run"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "alpha" in out and "beta" in out
+    assert "gamma" not in out and "web" not in out
+
+
+def test_jobs_must_be_positive(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        main([str(tmp_path), "--jobs", "0"])
+    assert exc.value.code == 2
+
+
+def test_parallel_output_matches_sequential(repo_factory, capsys):
+    tree = make_filter_tree(repo_factory)
+    assert main([str(tree), "--dry-run", "--jobs", "1"]) == 0
+    sequential = capsys.readouterr().out
+    assert main([str(tree), "--dry-run", "--jobs", "4"]) == 0
+    parallel = capsys.readouterr().out
+    assert parallel == sequential  # the table stays in discovery order
+
+
+def test_progress_lines_are_numbered_by_discovery_position(repo_factory, capsys):
+    tree = make_filter_tree(repo_factory)
+    assert main([str(tree), "--dry-run", "--jobs", "4"]) == 0
+    err = capsys.readouterr().err
+    # Line content is deterministic even though completion order is not:
+    # discovery order is apps/alpha, apps/beta, legacy/gamma, web.
+    assert "[1/4] apps/alpha" in err
+    assert "[2/4] apps/beta" in err
+    assert "[3/4] legacy/gamma" in err
+    assert "[4/4] web" in err
+
+
+# --- mixed manager trees ---------------------------------------------------------
+
+
+def make_mixed_tree(repo_factory, pip_repo_factory):
+    repo_factory("app-npm", package=ALPHA, outdated=ALPHA_OUTDATED)
+    repo_factory("app-pnpm", package=ALPHA, outdated=ALPHA_OUTDATED, pnpm=True)
+    repo_factory("app-dirty", package=ALPHA, outdated=ALPHA_OUTDATED, dirty=True)
+    pip_repo_factory(
+        "app-pip",
+        requirements="requests>=2.0\n",
+        installed={"requests": "2.31.0"},
+        resolve={"requests": "2.32.0"},
+    )
+    # pip_repo_factory writes into the same tree root by construction.
+    return pip_repo_factory.root
+
+
+def test_mixed_tree_sweeps_every_manager(repo_factory, pip_repo_factory, capsys):
+    tree = make_mixed_tree(repo_factory, pip_repo_factory)
+    code = main([str(tree), "--dry-run"])
+    assert code == 0
+    out = capsys.readouterr().out
+    for name in ("app-dirty", "app-npm", "app-pip", "app-pnpm"):
+        assert name in out
+    assert "4 repo(s)" in out
+
+
+def test_json_report_carries_manager_per_repo(
+    repo_factory, pip_repo_factory, capsys
+):
+    tree = make_mixed_tree(repo_factory, pip_repo_factory)
+    assert main([str(tree), "--json", "--dry-run"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    managers = {r["repo"]: r["manager"] for r in payload["repos"]}
+    assert managers == {
+        "app-dirty": "npm",
+        "app-npm": "npm",
+        "app-pip": "pip",
+        "app-pnpm": "pnpm",
+    }

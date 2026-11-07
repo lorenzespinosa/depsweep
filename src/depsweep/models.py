@@ -46,7 +46,7 @@ class Plan:
 class VerifyResult:
     """Outcome of the repo's own verification bar."""
 
-    step: str  # "test" | "build" | "install"
+    step: str  # "test" | "build" | "install" (npm/pnpm) | "pip check" (pip)
     passed: bool
 
 
@@ -57,6 +57,8 @@ STATE_SKIPPED = "skipped"
 STATE_ERROR = "error"
 STATE_CLEAN = "clean"
 STATE_DRY_RUN = "dry-run"
+# pip repos upgrade the venv, not tracked files, so nothing lands on a branch.
+STATE_APPLIED = "applied"
 
 
 @dataclass
@@ -67,6 +69,7 @@ class RepoResult:
     status: str
     reason: str | None = None
     branch: str | None = None
+    manager: str = "npm"  # "npm" | "pnpm" | "pip"
     upgrades: tuple[Upgrade, ...] = ()
     majors: tuple[Major, ...] = ()
     held: tuple[Held, ...] = ()

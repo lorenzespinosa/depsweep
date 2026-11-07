@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from depsweep.models import (
+    STATE_APPLIED,
     STATE_BRANCH_LEFT,
     STATE_CLEAN,
     STATE_ERROR,
@@ -111,12 +112,14 @@ def test_json_payload_shape():
     assert payload["totals"] == {
         "repos": 5,
         "branch_left": 1,
+        "applied": 0,
         "clean": 1,
         "skipped": 1,
         "failed": 2,
     }
     alpha = payload["repos"][0]
     assert alpha["repo"] == "alpha"
+    assert alpha["manager"] == "npm"
     assert alpha["upgraded"] == [{"name": "left-pad", "from": "1.2.3", "to": "1.4.0"}]
     assert alpha["majors"] == [{"name": "big", "from": "1.9.0", "to": "2.5.0"}]
     assert alpha["held"] == [
@@ -128,9 +131,9 @@ def test_json_payload_shape():
         "branch": "dep-sweep-20261106",
         "reason": None,
     }
-    # Every repo carries the same six fields as the table.
+    # Every repo carries the same fields as the table, plus its manager.
     for repo in payload["repos"]:
-        assert set(repo) == {"repo", "upgraded", "majors", "held", "verify", "state"}
+        assert set(repo) == {"repo", "manager", "upgraded", "majors", "held", "verify", "state"}
 
 
 def test_render_json_round_trips():
@@ -138,6 +141,36 @@ def test_render_json_round_trips():
     text = render_json(payload)
     assert json.loads(text) == payload
     assert json.loads(text)["dry_run"] is True
+
+
+def test_applied_pip_result_renders():
+    results = [
+        RepoResult(
+            repo="pyapp",
+            status=STATE_APPLIED,
+            manager="pip",
+            upgrades=(Upgrade("requests", "", "2.32.0"),),
+            verify=VerifyResult("pip check", True),
+        ),
+        RepoResult(
+            repo="pyold",
+            status=STATE_APPLIED,
+            manager="pip",
+            upgrades=(Upgrade("rich", "13.4.0", "13.9.4"),),
+        ),
+    ]
+    table = render_table(results)
+    assert "applied" in table
+    assert "requests new->2.32.0" in table  # fresh install, no current version
+    assert "rich 13.4.0->13.9.4" in table
+    assert "pip check ok" in table
+    assert "2 applied" in summary_line(results)
+    payload = to_json_payload(Path("/tmp/x"), "b", False, results)
+    assert payload["totals"]["applied"] == 2
+    assert payload["repos"][0]["manager"] == "pip"
+    assert payload["repos"][0]["upgraded"] == [
+        {"name": "requests", "from": "", "to": "2.32.0"}
+    ]
 
 
 def test_json_reports_reverted_reason_and_verify():

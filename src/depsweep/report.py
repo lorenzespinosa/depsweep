@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
+    STATE_APPLIED,
     STATE_BRANCH_LEFT,
     STATE_CLEAN,
     STATE_DRY_RUN,
@@ -20,6 +21,7 @@ COLUMNS = ("repo", "upgraded", "majors", "held", "verify", "state")
 _MAX_CELL = 60
 
 _STATE_TEXT = {
+    STATE_APPLIED: "applied",
     STATE_BRANCH_LEFT: "branch left",
     STATE_REVERTED: "reverted",
     STATE_SKIPPED: "skipped",
@@ -40,7 +42,8 @@ def _list_cell(items: list[str]) -> str:
 
 
 def _upgrade_text(u) -> str:
-    return f"{u.name} {u.current}->{u.wanted}"
+    # A pip fresh install has no current version; "new" reads in the table.
+    return f"{u.name} {u.current or 'new'}->{u.wanted}"
 
 
 def _held_text(h) -> str:
@@ -97,6 +100,7 @@ def summary_line(results: list[RepoResult]) -> str:
         return "0 repos found"
     counts = {
         "branch left": 0,
+        "applied": 0,
         "clean": 0,
         "skipped": 0,
         "failed": 0,
@@ -105,6 +109,8 @@ def summary_line(results: list[RepoResult]) -> str:
     for r in results:
         if r.status == STATE_BRANCH_LEFT:
             counts["branch left"] += 1
+        elif r.status == STATE_APPLIED:
+            counts["applied"] += 1
         elif r.status == STATE_CLEAN:
             counts["clean"] += 1
         elif r.status == STATE_SKIPPED:
@@ -120,6 +126,7 @@ def summary_line(results: list[RepoResult]) -> str:
 def _repo_payload(r: RepoResult) -> dict:
     return {
         "repo": r.repo,
+        "manager": r.manager,
         "upgraded": [
             {"name": u.name, "from": u.current, "to": u.wanted} for u in r.upgrades
         ],
@@ -158,6 +165,7 @@ def to_json_payload(
             "branch_left": sum(
                 1 for r in results if r.status == STATE_BRANCH_LEFT
             ),
+            "applied": sum(1 for r in results if r.status == STATE_APPLIED),
             "clean": sum(1 for r in results if r.status == STATE_CLEAN),
             "skipped": sum(1 for r in results if r.status == STATE_SKIPPED),
             "failed": sum(

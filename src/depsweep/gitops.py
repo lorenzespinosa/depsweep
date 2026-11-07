@@ -51,3 +51,8 @@ def delete_branch(repo: Path, name: str) -> subprocess.CompletedProcess[str]:
 def commit_all(repo: Path, message: str) -> bool:
     _git(repo, "add", "-A")
     return _git(repo, "commit", "-q", "-m", message).returncode == 0
+
+
+def ls_files(repo: Path, *paths: str) -> str:
+    """Paths git tracks under the given subtrees (empty when none)."""
+    return _git(repo, "ls-files", "--", *paths).stdout
