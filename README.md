@@ -19,6 +19,12 @@ For development:
     pip install -e .[dev]
     pytest
 
+## Use it with your AI
+
+The repo ships a ready-made skill file (`skill/SKILL.md`). Copy that folder
+into your AI assistant's skills directory and it will know when and how to
+run depsweep, including the safety rules.
+
 ## Quick start
 
     depsweep ~/code --dry-run     # see what would happen, change nothing
