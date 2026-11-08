@@ -1,4 +1,5 @@
-"""Rendering: the human table (fixed column order) and the --json report."""
+"""Rendering: the human table (fixed column order), the --json report, and
+the shared bits the HTML report reuses."""
 
 from __future__ import annotations
 
@@ -41,58 +42,35 @@ def _list_cell(items: list[str]) -> str:
     return _clip("; ".join(items)) if items else "-"
 
 
-def _upgrade_text(u) -> str:
+def upgrade_text(u) -> str:
     # A pip fresh install has no current version; "new" reads in the table.
     return f"{u.name} {u.current or 'new'}->{u.wanted}"
 
 
-def _held_text(h) -> str:
+def held_text(h) -> str:
     return f"{h.name} ({h.reason})"
 
 
-def _verify_text(result: RepoResult) -> str:
+def verify_text(result: RepoResult) -> str:
     if result.verify is None:
         return "-"
     outcome = "ok" if result.verify.passed else "failed"
     return f"{result.verify.step} {outcome}"
 
 
-def _state_text(result: RepoResult) -> str:
-    text = _STATE_TEXT.get(result.status, result.status)
+def state_word(result: RepoResult) -> str:
+    """Just the state name ("branch left", "reverted", ...), no decoration."""
+    return _STATE_TEXT.get(result.status, result.status)
+
+
+def state_text(result: RepoResult) -> str:
+    """The state cell, unclipped. The table clips it; the HTML does not."""
+    text = state_word(result)
     if result.status == STATE_BRANCH_LEFT and result.branch:
         text = f"branch left: {result.branch}"
     if result.reason:
         text = f"{text} ({result.reason})"
-    return _clip(text)
-
-
-def render_table(results: list[RepoResult]) -> str:
-    """The human summary table. Column order is fixed: repo | upgraded |
-    majors | held | verify | state."""
-    rows = [
-        [
-            _clip(r.repo),
-            _list_cell([_upgrade_text(u) for u in r.upgrades]),
-            _list_cell([_upgrade_text(m) for m in r.majors]),
-            _list_cell([_held_text(h) for h in r.held]),
-            _verify_text(r),
-            _state_text(r),
-        ]
-        for r in results
-    ]
-    widths = [
-        max(len(header), *(len(row[i]) for row in rows)) if rows else len(header)
-        for i, header in enumerate(COLUMNS)
-    ]
-    lines = [
-        "  ".join(header.ljust(widths[i]) for i, header in enumerate(COLUMNS)).rstrip(),
-        "  ".join("-" * width for width in widths),
-    ]
-    for row in rows:
-        lines.append(
-            "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
-        )
-    return "\n".join(lines)
+    return text
 
 
 def summary_line(results: list[RepoResult]) -> str:
@@ -123,12 +101,44 @@ def summary_line(results: list[RepoResult]) -> str:
     return f"{len(results)} repo(s): " + ", ".join(parts)
 
 
+def render_table(results: list[RepoResult]) -> str:
+    """The human summary table. Column order is fixed: repo | upgraded |
+    majors | held | verify | state."""
+    rows = [
+        [
+            _clip(r.repo),
+            _list_cell([upgrade_text(u) for u in r.upgrades]),
+            _list_cell([upgrade_text(m) for m in r.majors]),
+            _list_cell([held_text(h) for h in r.held]),
+            verify_text(r),
+            _clip(state_text(r)),
+        ]
+        for r in results
+    ]
+    widths = [
+        max(len(header), *(len(row[i]) for row in rows)) if rows else len(header)
+        for i, header in enumerate(COLUMNS)
+    ]
+    lines = [
+        "  ".join(header.ljust(widths[i]) for i, header in enumerate(COLUMNS)).rstrip(),
+        "  ".join("-" * width for width in widths),
+    ]
+    for row in rows:
+        lines.append(
+            "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        )
+    return "\n".join(lines)
+
+
 def _repo_payload(r: RepoResult) -> dict:
     return {
         "repo": r.repo,
         "manager": r.manager,
         "upgraded": [
             {"name": u.name, "from": u.current, "to": u.wanted} for u in r.upgrades
+        ],
+        "reverted": [
+            {"name": u.name, "from": u.current, "to": u.wanted} for u in r.reverted
         ],
         "majors": [
             {"name": m.name, "from": m.current, "to": m.wanted} for m in r.majors

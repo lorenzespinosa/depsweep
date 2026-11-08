@@ -28,8 +28,8 @@ the PyPI JSON API for a sample package.
    depsweep is stricter: majors are listed and never installed, so the
    question never comes up. Confirmed the current rule is sound.
 
-5. dependabot's core promise is the latest version "that's resolvable given a
-   project's other dependencies", then updated manifests and lockfiles. For
+5. dependabot's core promise is the latest version "that's resolvable given
+   a project's other dependencies", then updated manifests and lockfiles. For
    depsweep this means wanted versions must come from the package manager's
    own resolver output (npm or pnpm outdated), never from a raw registry
    "latest" field. Already true for npm; now also the design rule for pip.
@@ -72,3 +72,12 @@ the PyPI JSON API for a sample package.
 - pip support driven by pip's own dry-run resolver report; `==` and `===`
   pins held; the venv is the thing upgraded, with `pip check` as the gate.
 - Nothing from findings 1, 2, 9, 10 beyond roadmap notes.
+
+## Note for v0.3.0
+
+Finding 1 came off the roadmap for 0.3.0, in a bounded form: instead of
+running the gate once per package like ncu's doctor (N runs), the failing
+batch is bisected by halves (ceil(log2(N)) + 2 gate runs at most, then a
+whole-batch revert). git worktrees, also new in 0.3.0, make each probe
+cheap: resetting a throwaway worktree to the base commit leaves the repo
+untouched the whole time.

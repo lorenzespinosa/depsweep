@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depsweep"
-version = "0.2.0"
-description = "Safely upgrade in-range npm, pnpm and pip dependencies across many local git repos, with verification and auto-revert."
+version = "0.3.0"
+description = "Safely upgrade in-range npm, pnpm and pip dependencies across many local git repos, with worktree isolation, verification, bisection and auto-revert."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

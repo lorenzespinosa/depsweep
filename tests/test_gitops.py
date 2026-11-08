@@ -72,6 +72,69 @@ def test_commit_all_commits_everything(tmp_path):
     assert gitops.commit_all(repo, "depsweep: again") is False
 
 
+def test_head_sha_resolves_refs_and_rejects_the_unknown(tmp_path):
+    repo = init_repo(tmp_path / "r")
+    assert gitops.head_sha(repo, "refs/heads/main") == git(repo, "rev-parse", "HEAD").strip()
+    assert gitops.head_sha(repo) == git(repo, "rev-parse", "HEAD").strip()
+    assert gitops.head_sha(repo, "refs/heads/nope") is None
+
+
+def test_reset_to_moves_branch_and_wipes_changes(tmp_path):
+    repo = init_repo(tmp_path / "r")
+    base = gitops.head_sha(repo, "refs/heads/main")
+    gitops.checkout_new_branch(repo, "sweep")
+    (repo / "package.json").write_text('{"name": "changed"}\n')
+    git(repo, "commit", "-q", "-am", "a depsweep-style change")
+    assert gitops.head_sha(repo, "refs/heads/sweep") != base
+    gitops.reset_to(repo, base)
+    assert gitops.head_sha(repo, "refs/heads/sweep") == base
+    assert gitops.status_porcelain(repo) == ""
+    assert '"x"' in (repo / "package.json").read_text()
+
+
+# --- worktrees ------------------------------------------------------------------
+
+
+def test_worktree_lifecycle(tmp_path):
+    repo = init_repo(tmp_path / "r")
+    worktree = tmp_path / "wt" / "r"
+    assert gitops.worktree_add(repo, worktree, "sweep", "refs/heads/main").returncode == 0
+    # The repo itself never moved; the branch lives in the worktree.
+    assert gitops.current_branch(repo) == "main"
+    assert gitops.current_branch(worktree) == "sweep"
+    assert gitops.branch_exists(repo, "sweep")
+    assert str(worktree) in gitops.worktree_list(repo)
+    # A commit made in the worktree lands on the shared branch ref.
+    (worktree / "package.json").write_text('{"name": "from-worktree"}\n')
+    gitops.commit_all(worktree, "depsweep: from worktree")
+    assert "from-worktree" in git(repo, "show", "sweep:package.json")
+    # And survives the worktree being removed.
+    assert gitops.worktree_remove(repo, worktree).returncode == 0
+    assert gitops.worktree_list(repo) == [str(repo)]
+    assert gitops.branch_exists(repo, "sweep")
+    assert "from-worktree" in git(repo, "show", "sweep:package.json")
+
+
+def test_worktree_remove_forces_out_untracked_files(tmp_path):
+    repo = init_repo(tmp_path / "r")
+    worktree = tmp_path / "wt" / "r"
+    gitops.worktree_add(repo, worktree, "sweep", "refs/heads/main")
+    # Untracked build output (node_modules and friends) must not block.
+    (worktree / "node_modules").mkdir()
+    (worktree / "node_modules" / "junk").write_text("x\n")
+    (worktree / "package.json").write_text('{"name": "dirty"}\n')
+    assert gitops.worktree_remove(repo, worktree).returncode == 0
+    assert gitops.worktree_list(repo) == [str(repo)]
+
+
+def test_worktree_add_refuses_existing_branch(tmp_path):
+    repo = init_repo(tmp_path / "r")
+    git(repo, "branch", "sweep")
+    worktree = tmp_path / "wt" / "r"
+    assert gitops.worktree_add(repo, worktree, "sweep", "refs/heads/main").returncode != 0
+    assert gitops.worktree_list(repo) == [str(repo)]
+
+
 def test_module_makes_no_push_calls():
     """Regression guard for the README promise: depsweep never pushes.
 

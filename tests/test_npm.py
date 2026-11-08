@@ -140,3 +140,26 @@ def test_npm_scripts_tolerates_garbage():
     assert npm_scripts({"scripts": None}) == {}
     assert npm_scripts({"scripts": "nope"}) == {}
     assert npm_scripts({"scripts": {"test": "echo hi"}}) == {"test": "echo hi"}
+
+
+# --- the planted-culprit fixture used by the bisection tests --------------------
+
+
+def test_planted_break_fails_run_only_after_that_upgrade(repo_factory):
+    repo = repo_factory(
+        "planted",
+        package={
+            "name": "planted",
+            "scripts": {"test": "node --test"},
+            "dependencies": {"bad-lib": "^1.2.0", "good-lib": "^2.0.0"},
+        },
+        breaks={"bad-lib": "1.3.0"},
+    )
+    assert npm_run(repo, "test").returncode == 0  # untouched tree is green
+    npm_install(repo, "good-lib", "2.1.0")
+    assert npm_run(repo, "test").returncode == 0  # an innocent upgrade
+    npm_install(repo, "bad-lib", "1.3.0")
+    assert npm_run(repo, "test").returncode == 1  # the planted culprit
+    assert json.loads((repo / "package.json").read_text())["dependencies"][
+        "bad-lib"
+    ] == "^1.3.0"

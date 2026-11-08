@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>depsweep report</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:60rem;margin:1.5rem auto;color:#1b1b1b}
+h1{font-size:1.4rem;margin:0 0 .2rem}h2{font-size:1.1rem;margin:1.4rem 0 .3rem}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #d6d6d6;padding:.25rem .5rem;text-align:left;font-size:.9rem}
+th{background:#f0f0f0}
+tr.b td{background:#fdecea}tr.w td{background:#fff6e0}
+.m{color:#555}
+.r{border-top:1px solid #e2e2e2;padding:.4rem 0}
+.r p{margin:.2rem 0 0}
+.r p+p{font-size:.9rem;color:#333}
+</style>
+</head>
+<body>
+<h1>depsweep report</h1>
+<p class="m">5 repo(s) under /tmp/demo · branch dep-sweep-20261107 · 5 repo(s): 2 branch left, 1 applied, 1 clean, 1 skipped</p>
+<h2>Summary</h2><table><thead><tr><th>repo</th><th>manager</th><th>state</th></tr></thead><tbody><tr><td>app-npm</td><td>npm</td><td>branch left</td></tr><tr><td>app-bisect</td><td>npm</td><td>branch left</td></tr><tr><td>app-pip</td><td>pip</td><td>applied</td></tr><tr class="w"><td>app-dirty</td><td>npm</td><td>skipped</td></tr><tr><td>app-quiet</td><td>npm</td><td>clean</td></tr></tbody></table>
+<h2>Per-repo detail</h2><div class="r"><p><b>app-npm</b> branch left · test ok</p><p>upgraded left-pad 1.2.3->1.4.0; tool-kit 0.4.0->0.9.1, majors big-lib 1.9.0->2.5.0, held pinned-kit (exact pin)</p></div><div class="r"><p><b>app-bisect</b> branch left (reverted: bad-lib broke tests) · test ok</p><p>upgraded ok-lib 1.0.0->1.1.0, reverted bad-lib 2.0.0->2.1.0</p></div><div class="r"><p><b>app-pip</b> applied · pip check ok</p><p>upgraded requests 2.31.0->2.32.3</p></div><div class="r"><p><b>app-dirty</b> skipped (dirty worktree)</p><p>nothing to do</p></div><div class="r"><p><b>app-quiet</b> clean</p><p>nothing to do</p></div>
+</body>
+</html>

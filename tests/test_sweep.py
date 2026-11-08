@@ -1,4 +1,10 @@
-"""Per-repo sweep state machine tests on real git repos with the offline npm stub."""
+"""Per-repo sweep state machine tests on real git repos with the offline npm stub.
+
+Worktrees are the default, so most tests here assert the worktree contract:
+the repo never leaves its original branch, the sweep branch (with its
+commit) survives in the repo, and no worktree is left behind. The in-place
+contract (``--no-worktrees``) is covered in test_worktrees.py.
+"""
 
 from depsweep import gitops
 from depsweep.models import (
@@ -26,56 +32,78 @@ ALPHA_OUTDATED = {
 }
 
 
-def test_happy_path_leaves_branch_with_commit(repo_factory, npm_env):
+def test_happy_path_leaves_branch_with_commit(
+    repo_factory, npm_env, worktree_sandbox
+):
     repo = repo_factory("alpha", package=ALPHA, outdated=ALPHA_OUTDATED)
     result = sweep_repo(repo, "alpha", "dep-sweep-test")
 
     assert result.status == STATE_BRANCH_LEFT
     assert result.branch == "dep-sweep-test"
     assert result.reason is None
+    assert result.reverted == ()
     assert result.upgrades == (Upgrade("left-pad", "1.2.3", "1.4.0"),)
     assert result.verify == VerifyResult("test", True)
     assert not result.failed
 
-    # The repo sits on the sweep branch, clean, with a depsweep commit.
-    assert gitops.current_branch(repo) == "dep-sweep-test"
+    # The repo itself never moved and stays clean...
+    assert gitops.current_branch(repo) == "main"
     assert gitops.status_porcelain(repo) == ""
-    assert git(repo, "log", "-1", "--pretty=%s").strip().startswith("depsweep:")
-    assert read_pkg(repo)["dependencies"]["left-pad"] == "^1.4.0"
+    # ...the sweep branch carries the upgrade and a depsweep commit...
+    assert gitops.branch_exists(repo, "dep-sweep-test")
+    assert '"^1.4.0"' in git(repo, "show", "dep-sweep-test:package.json")
+    assert git(repo, "log", "-1", "--pretty=%s", "dep-sweep-test").strip().startswith(
+        "depsweep:"
+    )
+    # ...and no worktree is left behind.
+    assert gitops.worktree_list(repo) == [str(repo)]
+    assert list(worktree_sandbox.iterdir()) == []
     assert "install left-pad@1.4.0" in " ".join(npm_env.calls("alpha"))
 
     # The original branch still carries the old range: it was never touched.
     assert '"^1.2.3"' in git(repo, "show", "main:package.json")
 
 
-def test_failing_test_auto_reverts_and_names_the_step(repo_factory, npm_env):
+def test_failing_test_reverts_and_names_the_package_by_elimination(
+    repo_factory, npm_env, worktree_sandbox
+):
+    # One upgrade in the batch: the failing gate convicts it without any
+    # search, and the whole (one-package) batch is reverted.
     repo = repo_factory(
         "beta", package=ALPHA, outdated=ALPHA_OUTDATED, exits={"test": 1}
     )
     result = sweep_repo(repo, "beta", "dep-sweep-test")
 
     assert result.status == STATE_REVERTED
-    assert "verify failed: test" == result.reason
+    assert result.reason == "reverted: left-pad broke tests"
     assert result.verify == VerifyResult("test", False)
+    assert result.reverted == (Upgrade("left-pad", "1.2.3", "1.4.0"),)
     assert result.failed
 
-    # Back on the original branch, sweep branch gone, worktree clean.
+    # Repo untouched, no branch, no worktree.
     assert gitops.current_branch(repo) == "main"
     assert not gitops.branch_exists(repo, "dep-sweep-test")
     assert gitops.status_porcelain(repo) == ""
+    assert gitops.worktree_list(repo) == [str(repo)]
+    assert list(worktree_sandbox.iterdir()) == []
     assert read_pkg(repo)["dependencies"]["left-pad"] == "^1.2.3"
 
 
-def test_install_failure_auto_reverts_and_names_the_package(repo_factory):
+def test_install_failure_auto_reverts_and_names_the_package(
+    repo_factory, worktree_sandbox
+):
     repo = repo_factory(
         "gamma", package=ALPHA, outdated=ALPHA_OUTDATED, exits={"install": 1}
     )
     result = sweep_repo(repo, "gamma", "dep-sweep-test")
     assert result.status == STATE_REVERTED
     assert "install failed: left-pad@1.4.0" in result.reason
+    assert result.verify is None  # the gate never ran
     assert gitops.current_branch(repo) == "main"
     assert not gitops.branch_exists(repo, "dep-sweep-test")
     assert gitops.status_porcelain(repo) == ""
+    assert gitops.worktree_list(repo) == [str(repo)]
+    assert list(worktree_sandbox.iterdir()) == []
 
 
 def test_dirty_repo_is_skipped_without_any_npm_call(repo_factory, npm_env):
@@ -85,6 +113,7 @@ def test_dirty_repo_is_skipped_without_any_npm_call(repo_factory, npm_env):
     assert result.reason == "dirty worktree"
     assert npm_env.calls("dirty") == []
     assert gitops.current_branch(repo) == "main"
+    assert gitops.worktree_list(repo) == [str(repo)]
 
 
 def test_detached_head_is_skipped(repo_factory):
@@ -95,22 +124,27 @@ def test_detached_head_is_skipped(repo_factory):
     assert "detached HEAD" in result.reason
 
 
-def test_existing_branch_name_is_skipped(repo_factory):
+def test_existing_branch_name_is_skipped_before_any_worktree(
+    repo_factory, worktree_sandbox
+):
     repo = repo_factory("clash", package=ALPHA, outdated=ALPHA_OUTDATED)
     git(repo, "branch", "dep-sweep-test")
     result = sweep_repo(repo, "clash", "dep-sweep-test")
     assert result.status == STATE_SKIPPED
     assert "already exists" in result.reason
     assert gitops.current_branch(repo) == "main"
+    assert gitops.worktree_list(repo) == [str(repo)]
+    assert list(worktree_sandbox.iterdir()) == []
 
 
-def test_nothing_outdated_is_clean_no_branch(repo_factory, npm_env):
+def test_nothing_outdated_is_clean_no_branch(repo_factory, npm_env, worktree_sandbox):
     repo = repo_factory("quiet", package=ALPHA, outdated={})
     result = sweep_repo(repo, "quiet", "dep-sweep-test")
     assert result.status == STATE_CLEAN
     assert result.branch is None
     assert gitops.current_branch(repo) == "main"
     assert not gitops.branch_exists(repo, "dep-sweep-test")
+    assert list(worktree_sandbox.iterdir()) == []
     assert all("install" not in call for call in npm_env.calls("quiet"))
 
 
@@ -134,12 +168,13 @@ def test_majors_and_pins_only_are_reported_without_installs(repo_factory, npm_en
     assert all("install" not in call for call in npm_env.calls("lists"))
 
 
-def test_malformed_outdated_json_is_an_error(repo_factory):
+def test_malformed_outdated_json_is_an_error(repo_factory, worktree_sandbox):
     repo = repo_factory("broken", package=ALPHA, outdated="{{{ nope")
     result = sweep_repo(repo, "broken", "dep-sweep-test")
     assert result.status == STATE_ERROR
     assert "invalid JSON" in result.reason
     assert gitops.current_branch(repo) == "main"
+    assert list(worktree_sandbox.iterdir()) == []
 
 
 def test_invalid_package_json_is_an_error(repo_factory):
@@ -180,7 +215,7 @@ def test_verify_falls_back_to_clean_install(repo_factory, npm_env):
     assert "bare: npm install" in npm_env.calls("bare")
 
 
-def test_dry_run_touches_nothing(repo_factory, npm_env):
+def test_dry_run_touches_nothing(repo_factory, npm_env, worktree_sandbox):
     repo = repo_factory("dry", package=ALPHA, outdated=ALPHA_OUTDATED)
     result = sweep_repo(repo, "dry", "dep-sweep-test", dry_run=True)
 
@@ -194,6 +229,7 @@ def test_dry_run_touches_nothing(repo_factory, npm_env):
     assert not gitops.branch_exists(repo, "dep-sweep-test")
     assert gitops.status_porcelain(repo) == ""
     assert read_pkg(repo)["dependencies"]["left-pad"] == "^1.2.3"
+    assert list(worktree_sandbox.iterdir()) == []
     calls = npm_env.calls("dry")
     assert calls == ["dry: npm outdated --json"]
 

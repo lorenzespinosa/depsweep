@@ -31,6 +31,12 @@ def branch_exists(repo: Path, name: str) -> bool:
     return proc.returncode == 0
 
 
+def head_sha(repo: Path, ref: str = "HEAD") -> str | None:
+    """The commit id a ref points at, or None when git cannot resolve it."""
+    proc = _git(repo, "rev-parse", "--verify", "--quiet", ref)
+    return proc.stdout.strip() or None
+
+
 def checkout_new_branch(repo: Path, name: str) -> subprocess.CompletedProcess[str]:
     return _git(repo, "checkout", "-q", "-b", name)
 
@@ -42,6 +48,14 @@ def checkout(repo: Path, name: str) -> subprocess.CompletedProcess[str]:
 def discard_changes(repo: Path) -> subprocess.CompletedProcess[str]:
     """``git reset --hard``. Only ever called on depsweep's own sweep branch."""
     return _git(repo, "reset", "-q", "--hard")
+
+
+def reset_to(repo: Path, sha: str) -> subprocess.CompletedProcess[str]:
+    """Move the checked-out sweep branch back to ``sha`` and wipe the worktree.
+
+    Only ever called on depsweep's own sweep branch (in place) or inside a
+    depsweep worktree, so the reset cannot lose anyone's work."""
+    return _git(repo, "reset", "-q", "--hard", sha)
 
 
 def delete_branch(repo: Path, name: str) -> subprocess.CompletedProcess[str]:
@@ -56,3 +70,41 @@ def commit_all(repo: Path, message: str) -> bool:
 def ls_files(repo: Path, *paths: str) -> str:
     """Paths git tracks under the given subtrees (empty when none)."""
     return _git(repo, "ls-files", "--", *paths).stdout
+
+
+# --- worktrees -----------------------------------------------------------------
+# The sweep runs in a temporary worktree so the repo itself never switches
+# branches. The worktree shares the repo's refs, so a branch created and
+# committed there survives the worktree being removed.
+
+
+def worktree_add(
+    repo: Path, path: Path, branch: str, base: str
+) -> subprocess.CompletedProcess[str]:
+    """Check out a new ``branch`` at ``base`` in a worktree at ``path``."""
+    return _git(
+        repo, "worktree", "add", "--quiet", "-b", branch, str(path), base
+    )
+
+
+def worktree_remove(repo: Path, path: Path) -> subprocess.CompletedProcess[str]:
+    """Remove a worktree depsweep created. Always forced: a plain remove
+    refuses while untracked build output (node_modules and friends) sits in
+    the tree, and everything valuable has either been committed or is being
+    thrown away on purpose."""
+    return _git(repo, "worktree", "remove", "--force", str(path))
+
+
+def worktree_prune(repo: Path) -> subprocess.CompletedProcess[str]:
+    """Drop stale worktree metadata after a removal failed."""
+    return _git(repo, "worktree", "prune")
+
+
+def worktree_list(repo: Path) -> list[str]:
+    """The repo's registered worktree paths, main worktree first."""
+    proc = _git(repo, "worktree", "list", "--porcelain")
+    return [
+        line.removeprefix("worktree ").strip()
+        for line in proc.stdout.splitlines()
+        if line.startswith("worktree ")
+    ]

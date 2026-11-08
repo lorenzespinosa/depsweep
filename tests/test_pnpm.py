@@ -51,8 +51,11 @@ def test_pnpm_sweep_upgrades_via_add_and_leaves_branch(repo_factory, npm_env):
     # The whole repo went through pnpm, never plain npm.
     assert not [c for c in npm_env.calls("peta") if c.startswith("peta: npm ")]
 
-    assert gitops.current_branch(repo) == "dep-sweep-test"
-    assert read_pkg(repo)["dependencies"]["left-pad"] == "^1.4.0"
+    # The sweep happened in a worktree: the repo stayed put, the branch
+    # carries the upgrade, and the repo never left main.
+    assert gitops.current_branch(repo) == "main"
+    assert '"^1.4.0"' in git(repo, "show", "dep-sweep-test:package.json")
+    assert gitops.worktree_list(repo) == [str(repo)]
     # The original branch keeps the old range.
     assert '"^1.2.3"' in git(repo, "show", "main:package.json")
 
@@ -97,6 +100,7 @@ def test_pnpm_add_failure_reverts(repo_factory, npm_env):
     assert "install failed: left-pad@1.4.0" in result.reason
     assert gitops.current_branch(repo) == "main"
     assert not gitops.branch_exists(repo, "dep-sweep-test")
+    assert gitops.worktree_list(repo) == [str(repo)]
     assert read_pkg(repo)["dependencies"]["left-pad"] == "^1.2.3"
 
 

@@ -21,6 +21,7 @@ from depsweep.report import (
     COLUMNS,
     render_json,
     render_table,
+    state_text,
     summary_line,
     to_json_payload,
 )
@@ -121,6 +122,7 @@ def test_json_payload_shape():
     assert alpha["repo"] == "alpha"
     assert alpha["manager"] == "npm"
     assert alpha["upgraded"] == [{"name": "left-pad", "from": "1.2.3", "to": "1.4.0"}]
+    assert alpha["reverted"] == []
     assert alpha["majors"] == [{"name": "big", "from": "1.9.0", "to": "2.5.0"}]
     assert alpha["held"] == [
         {"name": "kit", "current": "3.1.0", "wanted": "3.2.0", "reason": "exact pin"}
@@ -131,9 +133,19 @@ def test_json_payload_shape():
         "branch": "dep-sweep-20261106",
         "reason": None,
     }
-    # Every repo carries the same fields as the table, plus its manager.
+    # Every repo carries the same fields as the table, plus its manager and
+    # the upgrades bisection reverted.
     for repo in payload["repos"]:
-        assert set(repo) == {"repo", "manager", "upgraded", "majors", "held", "verify", "state"}
+        assert set(repo) == {
+            "repo",
+            "manager",
+            "upgraded",
+            "reverted",
+            "majors",
+            "held",
+            "verify",
+            "state",
+        }
 
 
 def test_render_json_round_trips():
@@ -179,3 +191,35 @@ def test_json_reports_reverted_reason_and_verify():
     assert beta["verify"] == {"step": "test", "passed": False}
     assert beta["state"]["status"] == "reverted"
     assert beta["state"]["reason"] == "verify failed: test"
+
+
+def test_bisected_result_reports_the_culprit_everywhere():
+    result = RepoResult(
+        repo="bisected",
+        status=STATE_BRANCH_LEFT,
+        branch="dep-sweep-x",
+        reason="reverted: cc-lib broke tests",
+        upgrades=(Upgrade("aa-lib", "1.0.0", "1.1.0"),),
+        reverted=(Upgrade("cc-lib", "1.0.0", "1.1.0"),),
+        verify=VerifyResult("test", True),
+    )
+    assert not result.failed  # the rest landed: not a failed repo
+    assert state_text(result) == (
+        "branch left: dep-sweep-x (reverted: cc-lib broke tests)"
+    )
+    table = render_table([result])
+    assert "reverted: cc-lib broke tests" in table
+    assert "aa-lib 1.0.0->1.1.0" in table
+    payload = to_json_payload(Path("/tmp/x"), "b", False, [result])
+    repo = payload["repos"][0]
+    assert repo["reverted"] == [{"name": "cc-lib", "from": "1.0.0", "to": "1.1.0"}]
+    assert repo["upgraded"] == [{"name": "aa-lib", "from": "1.0.0", "to": "1.1.0"}]
+    assert payload["totals"]["branch_left"] == 1
+    assert payload["totals"]["failed"] == 0
+
+
+def test_state_text_is_unclipped_but_table_clips_it():
+    long_reason = "x" * 120
+    result = RepoResult(repo="r", status=STATE_ERROR, reason=long_reason)
+    assert long_reason in state_text(result)
+    assert long_reason not in render_table([result])

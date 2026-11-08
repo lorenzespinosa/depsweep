@@ -74,6 +74,9 @@ class RepoResult:
     majors: tuple[Major, ...] = ()
     held: tuple[Held, ...] = ()
     verify: VerifyResult | None = None
+    # Upgrades bisection pulled out of the batch because they broke the gate.
+    # On a branch-left repo the rest of the batch landed without them.
+    reverted: tuple[Upgrade, ...] = ()
 
     @property
     def failed(self) -> bool:

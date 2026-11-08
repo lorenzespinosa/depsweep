@@ -22,6 +22,14 @@ exactly one of them):
 - ``<repo>.add.exit``       same, but only heard for ``pnpm add``.
 - ``<repo>.test.exit``      exit code for ``run test`` (default 0).
 - ``<repo>.build.exit``     exit code for ``run build`` (default 0).
+- ``<repo>.breaks.json``    object of ``package: version``. Once a package
+  named here is upgraded to that version (its package.json range reads
+  ``^version``), every ``run`` script exits 1. This plants a breaking
+  upgrade so bisection has a real culprit to find. Takes effect whatever
+  script runs, matching a repo whose gate is its test script.
+- ``<repo>.breaks-together.json``  same shape, but ``run`` scripts fail only
+  while ALL the named upgrades are applied at once: an interaction no
+  single package is guilty of.
 
 ``install|add name@version`` rewrites that dependency in package.json to
 ``^version`` (with a leading caret, npm's usual save prefix). That is what
@@ -53,6 +61,22 @@ def override_exit(kind, default):
     return default
 
 
+def declared_ranges():
+    """dependencies plus devDependencies as written right now."""
+    try:
+        data = json.loads(Path("package.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    merged = {}
+    for section in ("dependencies", "devDependencies"):
+        block = data.get(section)
+        if isinstance(block, dict):
+            merged.update(block)
+    return merged
+
+
 def rewrite_package_json(install_args):
     """Apply each ``name@version`` argument to package.json."""
     pkg = Path("package.json")
@@ -78,6 +102,44 @@ def rewrite_package_json(install_args):
                 changed = True
     if changed:
         pkg.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _breaks_fixture(name):
+    path = FIXTURES / f"{REPO}.{name}.json"
+    if not path.exists():
+        return None
+    try:
+        loaded = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def planted_break_is_active():
+    """True when a planted break applies to the tree as it stands right now.
+
+    ``breaks.json`` plants a single guilty upgrade: active as soon as that
+    one package sits at its broken version. ``breaks-together.json`` plants
+    an interaction: active only while every listed upgrade is applied. The
+    stub marks an applied upgrade by the range it writes, so a break is
+    active exactly when package.json declares the broken versions."""
+    breaks = _breaks_fixture("breaks")
+    if breaks is not None:
+        declared = declared_ranges()
+        if any(
+            declared.get(str(name)) == f"^{version}"
+            for name, version in breaks.items()
+        ):
+            return True
+    together = _breaks_fixture("breaks-together")
+    if together is not None:
+        declared = declared_ranges()
+        if together and all(
+            declared.get(str(name)) == f"^{version}"
+            for name, version in together.items()
+        ):
+            return True
+    return False
 
 
 def cmd_outdated():
@@ -106,7 +168,11 @@ def cmd_install(args):
 
 def cmd_run(args):
     script = args[1] if len(args) > 1 else ""
-    return override_exit(script, 0) if script else 0
+    if not script:
+        return 0
+    if planted_break_is_active():
+        return 1
+    return override_exit(script, 0)
 
 
 def main():

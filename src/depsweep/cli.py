@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
-from . import report, sweep
+from . import htmlreport, report, sweep
 from .discover import filter_repos, find_repos, rel_name
 from .models import RepoResult
 
@@ -32,8 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Safely upgrade in-range dependencies across many local git "
             "repos, one repo at a time, with verification and auto-revert. "
-            "npm and pnpm repos get a sweep branch; pip repos (requirements.txt "
-            "or PEP 621 pyproject.toml) get their venv upgraded."
+            "npm and pnpm repos are swept in a temporary git worktree and "
+            "get a sweep branch; pip repos (requirements.txt or a PEP 621 "
+            "pyproject.toml) get their venv upgraded."
         ),
     )
     parser.add_argument(
@@ -59,6 +60,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="print a machine-readable JSON report instead of the table",
+    )
+    parser.add_argument(
+        "--html",
+        metavar="PATH",
+        default=None,
+        help=(
+            "also write a self-contained HTML report (inline CSS, no "
+            "scripts, no external assets) to PATH"
+        ),
+    )
+    parser.add_argument(
+        "--no-worktrees",
+        action="store_false",
+        dest="use_worktrees",
+        help=(
+            "sweep each repo in place by switching branches in the repo "
+            "itself, the pre-0.3.0 behaviour, instead of a temporary "
+            "git worktree"
+        ),
     )
     parser.add_argument(
         "--max-depth",
@@ -98,11 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _sweep_all(
-    repos: list[Path], root: Path, branch: str, dry_run: bool, jobs: int
+    repos: list[Path],
+    root: Path,
+    branch: str,
+    dry_run: bool,
+    jobs: int,
+    use_worktrees: bool,
 ) -> list[RepoResult]:
     """Sweep every repo, ``jobs`` at a time. Results come back in discovery
     order whatever the completion order was, so the table is deterministic.
-    Repos are independent directories, so parallel sweeps cannot step on
+    Each repo gets its own worktree, so parallel sweeps cannot step on
     each other."""
     total = len(repos)
     results: list[RepoResult | None] = [None] * total
@@ -110,11 +135,18 @@ def _sweep_all(
         for index, repo in enumerate(repos):
             rel = rel_name(root, repo)
             print(f"[{index + 1}/{total}] {rel}", file=sys.stderr)
-            results[index] = sweep.sweep_repo(repo, rel, branch, dry_run)
+            results[index] = sweep.sweep_repo(repo, rel, branch, dry_run, use_worktrees)
     else:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             futures = {
-                pool.submit(sweep.sweep_repo, repo, rel_name(root, repo), branch, dry_run): index
+                pool.submit(
+                    sweep.sweep_repo,
+                    repo,
+                    rel_name(root, repo),
+                    branch,
+                    dry_run,
+                    use_worktrees,
+                ): index
                 for index, repo in enumerate(repos)
             }
             for future in as_completed(futures):
@@ -139,19 +171,34 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-depth must be >= 0")
     if args.jobs < 1:
         parser.error("--jobs must be >= 1")
+    if args.html is not None:
+        html_path = Path(args.html).expanduser()
+        parent = html_path.parent if str(html_path.parent) else Path(".")
+        if not parent.is_dir():
+            parser.error(f"--html directory does not exist: {parent}")
     branch = args.branch or default_branch_name()
 
     repos = filter_repos(find_repos(root, args.max_depth), root, args.include, args.exclude)
     if not repos:
         print(f"no repos found under {root}", file=sys.stderr)
 
-    results = _sweep_all(repos, root, branch, args.dry_run, args.jobs)
+    results = _sweep_all(repos, root, branch, args.dry_run, args.jobs, args.use_worktrees)
 
     if args.json:
         print(report.render_json(report.to_json_payload(root, branch, args.dry_run, results)))
     else:
         print(report.render_table(results))
         print(report.summary_line(results))
+
+    if args.html is not None:
+        try:
+            htmlreport.write_html(
+                html_path, results, root, branch, args.dry_run
+            )
+        except OSError as exc:
+            print(f"could not write html report: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+        print(f"html report: {html_path}", file=sys.stderr)
 
     if any(r.failed for r in results):
         return EXIT_FAILED

@@ -9,17 +9,21 @@ from .models import STATE_ERROR, STATE_SKIPPED, RepoResult
 
 
 def sweep_repo(
-    repo: Path, rel_name: str, branch_name: str, dry_run: bool = False
+    repo: Path,
+    rel_name: str,
+    branch_name: str,
+    dry_run: bool = False,
+    use_worktrees: bool = True,
 ) -> RepoResult:
     """Sweep one repo. Never raises: unexpected errors become STATE_ERROR."""
     try:
-        return _sweep(repo, rel_name, branch_name, dry_run)
+        return _sweep(repo, rel_name, branch_name, dry_run, use_worktrees)
     except Exception as exc:  # noqa: BLE001 - one broken repo must not stop the run
         return RepoResult(rel_name, STATE_ERROR, reason=f"unexpected error: {exc}")
 
 
 def _sweep(
-    repo: Path, rel_name: str, branch_name: str, dry_run: bool
+    repo: Path, rel_name: str, branch_name: str, dry_run: bool, use_worktrees: bool
 ) -> RepoResult:
     # Which manager owns this repo, decided up front so every result, even
     # an early skip, can say which one it would have been.
@@ -38,12 +42,20 @@ def _sweep(
             reason="detached HEAD or unreadable branch",
         )
 
-    # 2. Dispatch to the manager that owns this repo.
+    # 2. Dispatch to the manager that owns this repo. pip sweeps always run
+    #    in the repo itself: the venv they upgrade lives there, so a
+    #    throwaway worktree would upgrade a copy and throw it away.
     if manager == managers.PIP:
         return pip.sweep_pip_repo(repo, rel_name, dry_run)
     if manager != "unknown":
         return node.run_node_sweep(
-            repo, rel_name, original, branch_name, dry_run, managers.tool_for(manager)
+            repo,
+            rel_name,
+            original,
+            branch_name,
+            dry_run,
+            managers.tool_for(manager),
+            use_worktrees,
         )
     return RepoResult(
         rel_name,

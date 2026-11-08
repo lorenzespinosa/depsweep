@@ -80,11 +80,18 @@ class RepoFactory:
         exits: dict[str, int] | None = None,
         dirty: bool = False,
         pnpm: bool = False,
+        breaks: dict[str, str] | None = None,
+        breaks_together: dict[str, str] | None = None,
     ) -> Path:
         """Create a clean git repo (branch ``main``) under root/name.
 
         ``pnpm=True`` adds a pnpm-lock.yaml so the repo is swept with pnpm;
-        the canned outdated payload and exit overrides are shared."""
+        the canned outdated payload and exit overrides are shared.
+        ``breaks`` plants a culprit: the repo's run scripts start failing
+        exactly when the named package has been upgraded to the given
+        version, which is how bisection scenarios are staged offline.
+        ``breaks_together`` plants the interaction variant: scripts fail
+        only while every listed package is upgraded at once."""
         repo = self.root / name
         repo.mkdir(parents=True)
         (repo / "package.json").write_text(json.dumps(package, indent=2) + "\n")
@@ -104,6 +111,14 @@ class RepoFactory:
             (self.npm.fixtures / f"{repo.name}.outdated.json").write_text(body)
         for kind, code in (exits or {}).items():
             (self.npm.fixtures / f"{repo.name}.{kind}.exit").write_text(f"{code}\n")
+        if breaks is not None:
+            (self.npm.fixtures / f"{repo.name}.breaks.json").write_text(
+                json.dumps(breaks, indent=2) + "\n"
+            )
+        if breaks_together is not None:
+            (self.npm.fixtures / f"{repo.name}.breaks-together.json").write_text(
+                json.dumps(breaks_together, indent=2) + "\n"
+            )
         if dirty:
             (repo / "uncommitted.txt").write_text("local dirt\n")
         return repo
@@ -214,7 +229,7 @@ def pip_env(tmp_path: Path, monkeypatch) -> PipEnv:
 
 @pytest.fixture()
 def repo_factory(tmp_path: Path, npm_env: NpmEnv) -> RepoFactory:
-    """make_repo(name, package, outdated=?, exits=?, dirty=?, pnpm=?) -> Path."""
+    """make_repo(name, package, outdated=?, exits=?, dirty=?, pnpm=?, breaks=?) -> Path."""
     tree = tmp_path / "tree"
     tree.mkdir(exist_ok=True)  # shared with pip_repo_factory in mixed tests
     return RepoFactory(npm=npm_env, root=tree)
@@ -234,6 +249,23 @@ def tree(tmp_path: Path) -> Path:
     tree = tmp_path / "tree"
     tree.mkdir()
     return tree
+
+
+@pytest.fixture()
+def worktree_sandbox(tmp_path: Path, monkeypatch) -> Path:
+    """Point depsweep's worktree parents at a directory tests can watch.
+
+    Returns that directory; after a sweep it must be empty again, which is
+    the cleanup assertion for worktree isolation."""
+    sandbox = tmp_path / "worktrees"
+    sandbox.mkdir()
+    real_mkdtemp = __import__("tempfile").mkdtemp
+
+    def sandboxed_mkdtemp(prefix: str):
+        return real_mkdtemp(prefix=prefix, dir=sandbox)
+
+    monkeypatch.setattr("depsweep.node.tempfile.mkdtemp", sandboxed_mkdtemp)
+    return sandbox
 
 
 def read_pkg(repo: Path) -> dict:
