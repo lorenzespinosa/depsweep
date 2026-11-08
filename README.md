@@ -1,5 +1,7 @@
 # depsweep
 
+[![CI](https://github.com/lorenzespinosa/depsweep/actions/workflows/ci.yml/badge.svg)](https://github.com/lorenzespinosa/depsweep/actions/workflows/ci.yml)
+
 A command line tool that upgrades in-range dependencies across many local git
 repos in one pass, a few repos at a time. Each repo's own test script (or
 build) is the gate for npm and pnpm repos, and any repo that fails the gate is
