@@ -227,8 +227,11 @@ def test_pip_install_failure_names_the_package(pip_repo_factory, pip_env):
         exits={"install": 1},
     )
     result = sweep_repo(repo, "explode", "dep-sweep-test")
-    assert result.status == STATE_REVERTED
+    # every install fails in this stub, including the restore of the old
+    # version, so the honest result is an error with an incomplete rollback
+    assert result.status == STATE_ERROR
     assert "install failed: requests@2.32.0" in result.reason
+    assert "rollback incomplete" in result.reason
 
 
 def test_pip_dirty_repo_is_skipped_before_any_pip_call(pip_repo_factory, pip_env):

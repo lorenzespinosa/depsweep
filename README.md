@@ -212,3 +212,7 @@ report is cheap to keep next to a run log.
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Limitations
+
+- Python environment markers (`pkg>=1; python_version < "3.12"`) are not evaluated: the marker is dropped and the requirement is treated as unconditional. Use `--exclude` for requirements that must only apply on other platforms or Python versions.

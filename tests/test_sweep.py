@@ -70,7 +70,7 @@ def test_failing_test_reverts_and_names_the_package_by_elimination(
     # One upgrade in the batch: the failing gate convicts it without any
     # search, and the whole (one-package) batch is reverted.
     repo = repo_factory(
-        "beta", package=ALPHA, outdated=ALPHA_OUTDATED, exits={"test": 1}
+        "beta", package=ALPHA, outdated=ALPHA_OUTDATED, breaks={"left-pad": "1.4.0"}
     )
     result = sweep_repo(repo, "beta", "dep-sweep-test")
 

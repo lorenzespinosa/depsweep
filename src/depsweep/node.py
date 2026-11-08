@@ -154,8 +154,14 @@ def _sweep_in_worktree(
         if added and gitops.worktree_remove(repo, work_dir).returncode != 0:
             gitops.worktree_prune(repo)
         shutil.rmtree(parent, ignore_errors=True)
-        if not keep_branch and gitops.branch_exists(repo, branch_name):
-            gitops.delete_branch(repo, branch_name)
+        if added and not keep_branch:
+            # prune again now the directory is gone, so a failed
+            # worktree_remove cannot leave the branch "checked out"
+            gitops.worktree_prune(repo)
+            if gitops.branch_exists(repo, branch_name):
+                gitops.delete_branch(repo, branch_name)
+        # when worktree_add failed, a branch by this name is not ours
+        # (add fails precisely because someone else created it)
 
     if failure is not None:
         return RepoResult(
@@ -275,6 +281,15 @@ def _apply_with_bisect(
             proc = tool.run(work_dir, step)
         return VerifyResult(step, proc.returncode == 0)
 
+    # Baseline: the gate must be green before anything is upgraded, or a
+    # later failure cannot honestly be attributed to the batch. test/build
+    # gates need the base dependencies installed first.
+    if step != "install":
+        tool.bare_install(work_dir)  # base deps; its own failures surface as a red baseline
+    baseline = run_gate()
+    if not baseline.passed:
+        return [], baseline, _COULD_NOT_ISOLATE, tuple(upgrades)
+
     def apply_batch(batch: list[Upgrade]) -> str | None:
         # One package at a time, so a failure names its package.
         for upgrade in batch:
@@ -290,16 +305,23 @@ def _apply_with_bisect(
     if verify.passed:
         return upgrades, verify, None, ()
 
-    # The gate failed on the whole batch. One upgrade means no search is
-    # needed: it is the culprit by elimination.
+    # The gate failed on the whole batch. The baseline run above proved the
+    # gate green at the base, so with one upgrade no search is needed: it is
+    # the culprit by elimination.
     if len(upgrades) == 1:
         return [], verify, f"reverted: {upgrades[0].name} broke tests", tuple(upgrades)
+
+    reset_failed = False
 
     def probe(subset: list[Upgrade]) -> bool:
         # True means the gate fails with exactly this subset applied to the
         # untouched base. A package that cannot even install counts as
-        # breaking.
-        gitops.reset_to(work_dir, base_sha)
+        # breaking. A reset that cannot restore the base poisons every
+        # later probe, so the whole search is abandoned instead.
+        nonlocal reset_failed
+        if gitops.reset_to(work_dir, base_sha).returncode != 0:
+            reset_failed = True
+            return True
         if apply_batch(subset) is not None:
             return True
         return not run_gate().passed
@@ -310,11 +332,13 @@ def _apply_with_bisect(
     culprit = bisect.narrow(
         upgrades, budget=math.ceil(math.log2(len(upgrades))) + 1, probe=probe
     )
-    if culprit is None:
+    if culprit is None or reset_failed:
         return [], verify, _COULD_NOT_ISOLATE, tuple(upgrades)
 
     survivors = [u for u in upgrades if u is not culprit]
-    gitops.reset_to(work_dir, base_sha)
+    if gitops.reset_to(work_dir, base_sha).returncode != 0:
+        # an unrestorable base means no survivor set can be trusted to land
+        return [], verify, _COULD_NOT_ISOLATE, tuple(upgrades)
     if apply_batch(survivors) is not None:
         return [], verify, _COULD_NOT_ISOLATE, tuple(upgrades)
     confirmed = run_gate()

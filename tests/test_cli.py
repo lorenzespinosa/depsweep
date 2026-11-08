@@ -106,7 +106,7 @@ def test_run_over_tree_exits_0_and_prints_table(repo_factory, capsys):
 
 
 def test_failed_repo_exits_1(repo_factory, capsys):
-    repo_factory("doomed", package=ALPHA, outdated=ALPHA_OUTDATED, exits={"test": 1})
+    repo_factory("doomed", package=ALPHA, outdated=ALPHA_OUTDATED, breaks={"left-pad": "1.4.0"})
     code = main([str(repo_factory.root)])
     assert code == 1
     out = capsys.readouterr().out

@@ -41,6 +41,12 @@ class Version:
             # PEP 440 shorthand: "1.2.3c1" means "1.2.3rc1".
             self.prerelease = "rc" + self.prerelease[1:]
 
+    @staticmethod
+    def _tail_key(tail: str) -> tuple[str, int]:
+        # split a trailing numeric run so post10 > post2 and rc.10 > rc.2
+        m = re.match(r"^(.*?)(\d+)$", tail)
+        return (m.group(1), int(m.group(2))) if m else (tail, 0)
+
     def _key(self) -> tuple:
         # Same x.y.z: prerelease < release < post-release. PEP 440 tails
         # (1.2.3rc1) get an explicit word rank so dev < a < b < rc holds;
@@ -48,15 +54,15 @@ class Version:
         # as npm does. A simplification that is enough for ordering, never
         # for range matching.
         if not self.prerelease:
-            tier, sub = 1, (0, "")
+            tier, sub = 1, (0, "", 0)
         elif self.prerelease.startswith("post"):
-            tier, sub = 2, (0, self.prerelease)
+            tier, sub = 2, (0, *self._tail_key(self.prerelease))
         elif self._pep_tail:
             word = _PRE_WORD_RE.match(self.prerelease)
             rank = _PRE_ORDER.get(word.group(0) if word else "", 4)
-            tier, sub = 0, (rank, self.prerelease)
+            tier, sub = 0, (rank, *self._tail_key(self.prerelease))
         else:
-            tier, sub = 0, (0, self.prerelease)
+            tier, sub = 0, (0, *self._tail_key(self.prerelease))
         return (self.major, self.minor, self.patch, tier) + sub
 
     def __eq__(self, other: object) -> bool:

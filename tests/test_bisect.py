@@ -171,7 +171,7 @@ def test_culprit_found_with_few_packages_goes_one_by_one(
     assert result.reason == "reverted: two broke tests"
     assert [u.name for u in result.upgrades] == ["one"]
     # batch {one,two} fail; probe {one} pass; probe {two} fail; confirm {one}.
-    assert len(gate_runs(npm_env.calls("tiny"))) == 4
+    assert len(gate_runs(npm_env.calls("tiny"))) == 5  # baseline + batch + probes
 
 
 def test_bisection_for_pnpm_repos_too(repo_factory, npm_env):
@@ -244,9 +244,9 @@ def test_interaction_only_failure_reverts_whole_batch(repo_factory, npm_env):
     assert [u.name for u in result.reverted] == ["x", "y"]
     assert not gitops.branch_exists(repo, "dep-sweep-test")
     runs = gate_runs(npm_env.calls("interact"))
-    # batch, then {x} passes, then {y} passes: 3 runs, inside the bound.
-    assert len(runs) == 3
-    assert len(runs) <= 1 + math.ceil(math.log2(2)) + 2
+    # baseline, batch, then {x} passes, then {y} passes: 4 runs, inside the bound.
+    assert len(runs) == 4
+    assert len(runs) <= 2 + math.ceil(math.log2(2)) + 2
 
 
 def test_gate_already_red_before_the_sweep_reverts_whole_batch(
@@ -275,7 +275,7 @@ def test_gate_already_red_before_the_sweep_reverts_whole_batch(
     assert result.verify == VerifyResult("test", False)
     assert not gitops.branch_exists(repo, "dep-sweep-test")
     # batch + {x} + confirm {y} = 3 runs.
-    assert len(gate_runs(npm_env.calls("alwaysred"))) == 3
+    assert len(gate_runs(npm_env.calls("alwaysred"))) == 1  # red baseline stops the sweep
 
 
 def test_single_upgrade_failure_needs_no_bisection_runs(repo_factory, npm_env):
@@ -293,7 +293,7 @@ def test_single_upgrade_failure_needs_no_bisection_runs(repo_factory, npm_env):
     assert result.status == STATE_REVERTED
     assert result.reason == "reverted: solo broke tests"
     # Exactly one gate run: the batch run. No probes needed.
-    assert len(gate_runs(npm_env.calls("lone"))) == 1
+    assert len(gate_runs(npm_env.calls("lone"))) == 2  # baseline + batch
 
 
 def test_culprit_in_second_half_is_found(repo_factory, npm_env):

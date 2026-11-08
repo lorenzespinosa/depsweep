@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 from contextlib import contextmanager
@@ -234,17 +235,30 @@ def _requirement_file(text: str) -> Iterator[Path]:
         path.unlink(missing_ok=True)
 
 
+class ResolverError(RuntimeError):
+    """pip's resolver failed or produced an unreadable report."""
+
+
+class PipInventoryError(RuntimeError):
+    """pip list failed or returned garbage; the environment is unknown."""
+
+
 def installed_versions(repo: Path, venv_bin: Path) -> dict[str, str]:
-    """What the venv has installed right now: normalized name -> version."""
+    """What the venv has installed right now: normalized name -> version.
+
+    Raises PipInventoryError when pip itself fails or emits unusable output:
+    an unknown environment must never be treated as an empty one, or
+    existing packages look like fresh installs and majors get applied.
+    """
     proc = _pip(repo, venv_bin, "list", "--local", "--format", "json")
     if proc.returncode != 0:
-        return {}
+        raise PipInventoryError(f"pip list exited {proc.returncode}")
     try:
         data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise PipInventoryError(f"pip list emitted invalid JSON: {exc}") from exc
     if not isinstance(data, list):
-        return {}
+        raise PipInventoryError("pip list emitted an unexpected shape")
     return {
         norm(str(item["name"])): str(item["version"])
         for item in data
@@ -275,14 +289,14 @@ def resolve_wanted(repo: Path, venv_bin: Path, req: Requirement) -> str | None:
             reqfile,
         )
     if proc.returncode != 0:
-        return None
+        raise ResolverError(f"resolver exited {proc.returncode} for {req.name}")
     start = proc.stdout.find("{")
     if start < 0:
-        return None
+        raise ResolverError(f"resolver report missing for {req.name}")
     try:
         report = json.loads(proc.stdout[start:])
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        raise ResolverError(f"resolver report unreadable for {req.name}: {exc}") from exc
     for item in report.get("install") or []:
         meta = item.get("metadata") or {} if isinstance(item, dict) else {}
         if norm(str(meta.get("name", ""))) == norm(req.name):
@@ -386,14 +400,30 @@ def sweep_pip_repo(repo: Path, rel_name: str, dry_run: bool = False) -> RepoResu
                 reason="venv is tracked by git; refusing to upgrade it",
             )
 
-        current = installed_versions(repo, venv_bin)
+        try:
+            current = installed_versions(repo, venv_bin)
+        except PipInventoryError as exc:
+            return RepoResult(
+                rel_name,
+                STATE_ERROR,
+                manager="pip",
+                reason=f"could not inventory the venv ({exc}); refusing to upgrade",
+            )
         wanted = {}
-        for key, req in declared.items():
-            if req.direct:
-                continue  # held anyway; a URL is never resolver input
-            version = resolve_wanted(repo, venv_bin, req)
-            if version is not None:
-                wanted[key] = version
+        try:
+            for key, req in declared.items():
+                if req.direct:
+                    continue  # held anyway; a URL is never resolver input
+                version = resolve_wanted(repo, venv_bin, req)
+                if version is not None:
+                    wanted[key] = version
+        except ResolverError as exc:
+            return RepoResult(
+                rel_name,
+                STATE_ERROR,
+                manager="pip",
+                reason=f"dependency resolver failed ({exc})",
+            )
         plan = build_plan(declared, current, wanted)
         carried = dict(upgrades=plan.upgrades, majors=plan.majors, held=plan.held)
 
@@ -414,6 +444,9 @@ def sweep_pip_repo(repo: Path, rel_name: str, dry_run: bool = False) -> RepoResu
             )
             if proc.returncode != 0:
                 failure = f"install failed: {upgrade.name}@{upgrade.wanted}"
+                # a failed install may still be partially applied; it belongs
+                # on the rollback list so cleanup accounts for it
+                applied.append((req, old))
                 break
             applied.append((req, old))
 
@@ -425,7 +458,16 @@ def sweep_pip_repo(repo: Path, rel_name: str, dry_run: bool = False) -> RepoResu
                 failure = "verify failed: pip check"
 
         if failure is not None:
-            _restore(repo, venv_bin, applied)
+            rollback_ok = _restore(repo, venv_bin, applied)
+            if not rollback_ok:
+                return RepoResult(
+                    rel_name,
+                    STATE_ERROR,
+                    manager="pip",
+                    reason=f"{failure}; rollback incomplete, see above",
+                    verify=verify,
+                    **carried,
+                )
             return RepoResult(
                 rel_name, STATE_REVERTED, manager="pip", reason=failure, verify=verify, **carried
             )
@@ -437,10 +479,19 @@ def sweep_pip_repo(repo: Path, rel_name: str, dry_run: bool = False) -> RepoResu
             shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _restore(repo: Path, venv_bin: Path, applied: list[tuple[Requirement, str]]) -> None:
-    """Put back the versions that were installed before the sweep. Packages
-    that had no version before (fresh installs) are left in place; on a
-    scratch venv the whole venv is deleted right after, so nothing lingers."""
+def _restore(repo: Path, venv_bin: Path, applied: list[tuple[Requirement, str]]) -> bool:
+    """Put the environment back the way it was found. Fresh installs (no
+    previous version) are uninstalled; previous versions are reinstalled.
+    Returns True only when every restore step succeeded; the caller reports
+    an incomplete rollback as an error instead of a clean revert."""
+    ok = True
     for req, old in applied:
         if old:
-            install_version(repo, venv_bin, req, old)
+            if install_version(repo, venv_bin, req, old).returncode != 0:
+                print(f"depsweep: could not restore {req.name}=={old}", file=sys.stderr)
+                ok = False
+        else:
+            if _pip(repo, venv_bin, "uninstall", "-y", req.name).returncode != 0:
+                print(f"depsweep: could not uninstall {req.name}", file=sys.stderr)
+                ok = False
+    return ok
